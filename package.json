@@ -17,7 +17,8 @@
     "search",
     "pagination",
     "sorting",
-    "mongodb"
+    "mongodb",
+    "mongoose-query-toolkit"
   ],
   "author": "",
   "license": "MIT",
