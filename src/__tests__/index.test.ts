@@ -1,6 +1,15 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { QueryToolkit } from '../index';
 
+// Mock mongoose methods
+const mockExec = jest.fn();
+const mockSkip = jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ exec: mockExec }) });
+const mockLimit = jest.fn().mockReturnValue({ exec: mockExec });
+const mockSort = jest.fn().mockReturnValue({ skip: mockSkip });
+const mockSelect = jest.fn().mockReturnValue({ sort: mockSort, skip: mockSkip });
+const mockFind = jest.fn().mockReturnValue({ sort: mockSort, select: mockSelect, skip: mockSkip });
+const mockCountDocuments = jest.fn().mockResolvedValue(0);
+
 interface TestUser extends Document {
   name: string;
   email: string;
@@ -10,77 +19,97 @@ interface TestUser extends Document {
 }
 
 describe('QueryToolkit', () => {
-  let UserModel: mongoose.Model<TestUser>;
+  let UserModel: any;
   let queryToolkit: QueryToolkit<TestUser>;
 
-  beforeAll(async () => {
-    const userSchema = new Schema<TestUser>(
-      {
-        name: String,
-        email: String,
-        status: String,
-        role: String,
-        createdAt: Date,
-      },
-      { timestamps: true }
-    );
+  beforeAll(() => {
+    // Create a mock UserModel
+    UserModel = {
+      find: mockFind,
+      countDocuments: mockCountDocuments,
+    };
 
-    UserModel = mongoose.model<TestUser>('User', userSchema);
-    queryToolkit = new QueryToolkit(UserModel, {
+    queryToolkit = new QueryToolkit(UserModel as any, {
       searchFields: ['name', 'email'],
       filterableFields: ['status', 'role'],
+      selectableFields: ['name', 'email', 'status', 'role'],
     });
   });
 
-  beforeEach(async () => {
-    await UserModel.deleteMany({});
-  });
-
-  afterAll(async () => {
-    await mongoose.disconnect();
+  beforeEach(() => {
+    // Reset mocks before each test
+    jest.clearAllMocks();
+    
+    // Setup default mock return values
+    mockExec.mockResolvedValue([]);
+    mockCountDocuments.mockResolvedValue(0);
   });
 
   it('should search users by name or email', async () => {
-    const users = [
+    // Setup mock data
+    const mockUsers = [
       { name: 'John Doe', email: 'john@example.com', status: 'active', role: 'user' },
       { name: 'Jane Smith', email: 'jane@example.com', status: 'active', role: 'admin' },
-      { name: 'Bob Johnson', email: 'john.bob@example.com', status: 'inactive', role: 'user' },
     ];
+    mockExec.mockResolvedValue(mockUsers);
+    mockCountDocuments.mockResolvedValue(2);
 
-    await UserModel.create(users);
-
+    // Execute query
     const result = await queryToolkit.findWithOptions({ q: 'john' });
+    
+    // Verify search query was built correctly
+    expect(mockFind).toHaveBeenCalledWith({
+      $or: expect.arrayContaining([
+        { name: { $regex: 'john', $options: 'i' } },
+        { email: { $regex: 'john', $options: 'i' } },
+      ])
+    });
+    
+    // Verify result
     expect(result.totalDocs).toBe(2);
-    expect(result.docs.map(d => d.name)).toContain('John Doe');
-    expect(result.docs.map(d => d.name)).toContain('Bob Johnson');
+    expect(result.docs).toEqual(mockUsers);
   });
 
   it('should filter users by status and role', async () => {
-    const users = [
+    // Setup mock data
+    const mockUsers = [
       { name: 'John Doe', email: 'john@example.com', status: 'active', role: 'user' },
-      { name: 'Jane Smith', email: 'jane@example.com', status: 'active', role: 'admin' },
-      { name: 'Bob Johnson', email: 'bob@example.com', status: 'inactive', role: 'user' },
     ];
+    mockExec.mockResolvedValue(mockUsers);
+    mockCountDocuments.mockResolvedValue(1);
 
-    await UserModel.create(users);
-
+    // Execute query
     const result = await queryToolkit.findWithOptions({ status: 'active', role: 'user' });
+    
+    // Verify filter query was built correctly
+    expect(mockFind).toHaveBeenCalledWith({
+      status: 'active',
+      role: 'user',
+    });
+    
+    // Verify result
     expect(result.totalDocs).toBe(1);
-    expect(result.docs[0].name).toBe('John Doe');
+    expect(result.docs).toEqual(mockUsers);
   });
 
   it('should paginate results', async () => {
-    const users = Array.from({ length: 15 }, (_, i) => ({
-      name: `User ${i + 1}`,
-      email: `user${i + 1}@example.com`,
-      status: 'active',
-      role: 'user',
+    // Setup mock data
+    const mockUsers = Array.from({ length: 5 }, (_, i) => ({
+      name: `User ${i + 6}`, // Users 6-10 (page 2)
+      email: `user${i + 6}@example.com`,
     }));
+    mockExec.mockResolvedValue(mockUsers);
+    mockCountDocuments.mockResolvedValue(15); // Total 15 users
 
-    await UserModel.create(users);
-
+    // Execute query
     const result = await queryToolkit.findWithOptions({ page: 2, limit: 5 });
-    expect(result.docs.length).toBe(5);
+    
+    // Verify pagination parameters
+    expect(mockSkip).toHaveBeenCalledWith(5); // Skip first 5 users
+    expect(mockSkip().limit).toHaveBeenCalledWith(5); // Limit to 5 users
+    
+    // Verify result
+    expect(result.docs).toEqual(mockUsers);
     expect(result.page).toBe(2);
     expect(result.limit).toBe(5);
     expect(result.totalPages).toBe(3);
@@ -89,20 +118,55 @@ describe('QueryToolkit', () => {
   });
 
   it('should sort results', async () => {
-    const users = [
-      { name: 'John Doe', email: 'john@example.com', status: 'active', role: 'user' },
-      { name: 'Alice Brown', email: 'alice@example.com', status: 'active', role: 'user' },
-      { name: 'Bob Johnson', email: 'bob@example.com', status: 'active', role: 'user' },
+    // Setup mock data
+    const mockUsers = [
+      { name: 'Alice Brown' },
+      { name: 'Bob Johnson' },
+      { name: 'John Doe' },
     ];
+    mockExec.mockResolvedValue(mockUsers);
+    
+    // Execute query with ascending sort
+    await queryToolkit.findWithOptions({ sort: 'name' });
+    
+    // Verify sort parameters
+    expect(mockSort).toHaveBeenCalledWith({ name: 1 });
+    
+    // Execute query with descending sort
+    await queryToolkit.findWithOptions({ sort: '-name' });
+    
+    // Verify sort parameters
+    expect(mockSort).toHaveBeenCalledWith({ name: -1 });
+  });
 
-    await UserModel.create(users);
+  it('should select specific fields', async () => {
+    // Execute query with field selection
+    await queryToolkit.findWithOptions({ select: 'name,email' });
+    
+    // Verify select was called with correct fields
+    expect(mockSelect).toHaveBeenCalledWith('name email');
+  });
 
-    const result = await queryToolkit.findWithOptions({ sort: 'name' });
-    expect(result.docs[0].name).toBe('Alice Brown');
-    expect(result.docs[2].name).toBe('John Doe');
+  it('should exclude specific fields with minus prefix', async () => {
+    // Execute query with field exclusion
+    await queryToolkit.findWithOptions({ select: '-email,-role' });
+    
+    // Verify select was called with correct exclusion fields
+    expect(mockSelect).toHaveBeenCalledWith('-email -role');
+  });
 
-    const reversedResult = await queryToolkit.findWithOptions({ sort: '-name' });
-    expect(reversedResult.docs[0].name).toBe('John Doe');
-    expect(reversedResult.docs[2].name).toBe('Alice Brown');
+  it('should only select fields that are in selectableFields', async () => {
+    // Create a new QueryToolkit with limited selectableFields
+    const limitedQueryToolkit = new QueryToolkit(UserModel as any, {
+      searchFields: ['name', 'email'],
+      filterableFields: ['status', 'role'],
+      selectableFields: ['name', 'status'], // Only name and status are selectable
+    });
+
+    // Execute query with field selection including a non-selectable field
+    await limitedQueryToolkit.findWithOptions({ select: 'name,email,status' });
+    
+    // Verify select was called with only the selectable fields
+    expect(mockSelect).toHaveBeenCalledWith('name status');
   });
 });

@@ -8,6 +8,7 @@ A powerful and flexible toolkit for handling Mongoose queries with support for s
 - 🔁 **Filtering**: Filter documents by any field
 - 📄 **Pagination**: Built-in pagination support
 - 📊 **Sorting**: Sort results by any field (ascending or descending)
+- 🔎 **Field Selection**: Select only the fields you need in the response
 
 ## Installation
 
@@ -24,7 +25,8 @@ import { User } from './models/user';
 // Initialize the toolkit with your Mongoose model
 const userQueryToolkit = new QueryToolkit(User, {
   searchFields: ['name', 'email'],
-  filterableFields: ['status', 'role']
+  filterableFields: ['status', 'role'],
+  selectableFields: ['name', 'email', 'status', 'role', 'createdAt']
 });
 
 // Use the toolkit to query your data
@@ -34,7 +36,8 @@ async function getUsers() {
     status: 'active',       // Filter
     page: 1,               // Page number
     limit: 10,             // Items per page
-    sort: '-createdAt,name' // Sort by createdAt DESC and name ASC
+    sort: '-createdAt,name', // Sort by createdAt DESC and name ASC
+    select: 'name,email,status' // Only return these fields
   });
 
   console.log(result);
@@ -64,6 +67,7 @@ new QueryToolkit(model, options)
 - `options`: Configuration object
   - `searchFields`: Array of fields to search in
   - `filterableFields`: Array of fields that can be filtered
+  - `selectableFields`: Array of fields that can be selected (if empty, all fields can be selected)
 
 #### Methods
 
@@ -75,6 +79,7 @@ interface QueryOptions {
   page?: number;           // Page number (default: 1)
   limit?: number;          // Items per page (default: 10)
   sort?: string;           // Sort string (e.g., '-createdAt,name')
+  select?: string;         // Fields to select (e.g., 'name,email' or '-password,-__v')
   [key: string]: any;      // Additional filter fields
 }
 ```
