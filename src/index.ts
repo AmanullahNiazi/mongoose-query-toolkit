@@ -1,4 +1,4 @@
-import { Query, Document, Model } from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 export interface QueryOptions {
   q?: string;
@@ -6,6 +6,7 @@ export interface QueryOptions {
   limit?: number;
   sort?: string;
   select?: string;
+  populate?: string;
   [key: string]: any;
 }
 
@@ -23,6 +24,7 @@ export class QueryToolkit<T extends Document> {
   private searchFields: string[];
   private filterableFields: string[];
   private selectableFields: string[];
+  private populatableFields: string[] = [];
 
   constructor(
     private readonly model: Model<T>,
@@ -30,11 +32,13 @@ export class QueryToolkit<T extends Document> {
       searchFields?: string[];
       filterableFields?: string[];
       selectableFields?: string[];
+      populatableFields?: string[];
     } = {}
   ) {
     this.searchFields = options.searchFields || [];
     this.filterableFields = options.filterableFields || [];
     this.selectableFields = options.selectableFields || [];
+    this.populatableFields = options.populatableFields || [];
   }
 
   private buildSearchQuery(q: string): object {
@@ -92,8 +96,23 @@ export class QueryToolkit<T extends Document> {
     return validFields.join(' ');
   }
 
+  private buildPopulateFields(populate?: string): string[] {
+    if (!populate) return [];
+
+    // Convert comma-separated fields to array
+    const fields = populate.split(',').map(field => field.trim());
+    
+    // If populatableFields is empty, allow all fields
+    if (this.populatableFields.length === 0) {
+      return fields;
+    }
+    
+    // Filter fields based on populatableFields
+    return fields.filter(field => this.populatableFields.includes(field));
+  }
+
   async findWithOptions(options: QueryOptions = {}): Promise<PaginationResult<T>> {
-    const { q, page = 1, limit = 10, sort, select, ...filterOptions } = options;
+    const { q, page = 1, limit = 10, sort, select, populate, ...filterOptions } = options;
     const skip = (page - 1) * limit;
 
     const query = {
@@ -103,6 +122,7 @@ export class QueryToolkit<T extends Document> {
 
     const sortQuery = this.parseSortString(sort);
     const selectQuery = this.buildSelectQuery(select);
+    const populateFields = this.buildPopulateFields(populate);
 
     let findQuery = this.model.find(query);
     
@@ -113,6 +133,12 @@ export class QueryToolkit<T extends Document> {
     if (selectQuery) {
       findQuery = findQuery.select(selectQuery);
     }
+    
+    // Apply populate fields
+    populateFields.forEach(field => {
+      // Using type assertion to handle the TypeScript error
+      findQuery = findQuery.populate(field) as any;
+    });
     
     const [docs, totalDocs] = await Promise.all([
       findQuery

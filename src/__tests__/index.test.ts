@@ -5,9 +5,27 @@ import { QueryToolkit } from '../index';
 const mockExec = jest.fn();
 const mockSkip = jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ exec: mockExec }) });
 const mockLimit = jest.fn().mockReturnValue({ exec: mockExec });
-const mockSort = jest.fn().mockReturnValue({ skip: mockSkip });
-const mockSelect = jest.fn().mockReturnValue({ sort: mockSort, skip: mockSkip });
-const mockFind = jest.fn().mockReturnValue({ sort: mockSort, select: mockSelect, skip: mockSkip });
+const mockPopulate = jest.fn().mockImplementation(function() {
+  return { 
+    skip: mockSkip, 
+    limit: mockLimit, 
+    exec: mockExec,
+    populate: mockPopulate,
+    sort: mockSort,
+    select: mockSelect
+  };
+});
+const mockSort = jest.fn().mockImplementation(function() {
+  return { 
+    skip: mockSkip, 
+    populate: mockPopulate,
+    select: mockSelect,
+    limit: mockLimit,
+    exec: mockExec
+  };
+});
+const mockSelect = jest.fn().mockReturnValue({ sort: mockSort, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec });
+const mockFind = jest.fn().mockReturnValue({ sort: mockSort, select: mockSelect, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec });
 const mockCountDocuments = jest.fn().mockResolvedValue(0);
 
 interface TestUser extends Document {
@@ -33,6 +51,7 @@ describe('QueryToolkit', () => {
       searchFields: ['name', 'email'],
       filterableFields: ['status', 'role'],
       selectableFields: ['name', 'email', 'status', 'role'],
+      populatableFields: ['profile', 'posts', 'comments'],
     });
   });
 
@@ -168,5 +187,48 @@ describe('QueryToolkit', () => {
     
     // Verify select was called with only the selectable fields
     expect(mockSelect).toHaveBeenCalledWith('name status');
+  });
+
+  it('should populate referenced fields', async () => {
+    // Execute query with populate
+    await queryToolkit.findWithOptions({ populate: 'profile,posts' });
+    
+    // Verify populate was called for each field
+    expect(mockPopulate).toHaveBeenCalledWith('profile');
+    expect(mockPopulate).toHaveBeenCalledWith('posts');
+  });
+
+  it('should only populate fields that are in populatableFields', async () => {
+    // Create a new QueryToolkit with limited populatableFields
+    const limitedQueryToolkit = new QueryToolkit(UserModel as any, {
+      searchFields: ['name', 'email'],
+      filterableFields: ['status', 'role'],
+      populatableFields: ['profile'], // Only profile is populatable
+    });
+
+    // Execute query with populate including a non-populatable field
+    await limitedQueryToolkit.findWithOptions({ populate: 'profile,posts,comments' });
+    
+    // Verify populate was called only for the populatable field
+    expect(mockPopulate).toHaveBeenCalledWith('profile');
+    expect(mockPopulate).not.toHaveBeenCalledWith('posts');
+    expect(mockPopulate).not.toHaveBeenCalledWith('comments');
+  });
+
+  it('should allow all populate fields if populatableFields is empty', async () => {
+    // Create a new QueryToolkit without populatableFields
+    const openQueryToolkit = new QueryToolkit(UserModel as any, {
+      searchFields: ['name', 'email'],
+      filterableFields: ['status', 'role'],
+      // No populatableFields specified
+    });
+
+    // Execute query with populate
+    await openQueryToolkit.findWithOptions({ populate: 'profile,posts,comments' });
+    
+    // Verify populate was called for all fields
+    expect(mockPopulate).toHaveBeenCalledWith('profile');
+    expect(mockPopulate).toHaveBeenCalledWith('posts');
+    expect(mockPopulate).toHaveBeenCalledWith('comments');
   });
 });
