@@ -1,4 +1,4 @@
-import mongoose, { Document, Model } from 'mongoose';
+import { Document, Model } from 'mongoose';
 
 export interface QueryOptions {
   q?: string;
@@ -125,21 +125,21 @@ export class QueryToolkit<T extends Document> {
     const populateFields = this.buildPopulateFields(populate);
 
     let findQuery = this.model.find(query);
-    
+
     if (sortQuery && Object.keys(sortQuery).length > 0) {
       findQuery = findQuery.sort(sortQuery);
     }
-    
+
     if (selectQuery) {
       findQuery = findQuery.select(selectQuery);
     }
-    
+
     // Apply populate fields
     populateFields.forEach(field => {
       // Using type assertion to handle the TypeScript error
       findQuery = findQuery.populate(field) as any;
     });
-    
+
     const [docs, totalDocs] = await Promise.all([
       findQuery
         .skip(skip)
@@ -159,5 +159,16 @@ export class QueryToolkit<T extends Document> {
       hasNextPage: page < totalPages,
       hasPrevPage: page > 1,
     };
+  }
+
+  async countWithOptions(options: QueryOptions = {}): Promise<number> {
+    const { q, ...filterOptions } = options;
+
+    const query = {
+      ...this.buildSearchQuery(q || ''),
+      ...this.buildFilterQuery(filterOptions),
+    };
+
+    return this.model.countDocuments(query);
   }
 }

@@ -1,5 +1,6 @@
-import mongoose, { Document, Schema } from 'mongoose';
-import { QueryToolkit } from '../index';
+import { describe, it, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+import { Document } from 'mongoose';
+import { QueryToolkit } from '../index.js';
 
 // Mock mongoose methods
 const mockExec = jest.fn();
@@ -230,5 +231,89 @@ describe('QueryToolkit', () => {
     expect(mockPopulate).toHaveBeenCalledWith('profile');
     expect(mockPopulate).toHaveBeenCalledWith('posts');
     expect(mockPopulate).toHaveBeenCalledWith('comments');
+  });
+
+  describe('countWithOptions', () => {
+    it('should return count of all documents', async () => {
+      mockCountDocuments.mockResolvedValue(42);
+
+      const count = await queryToolkit.countWithOptions();
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({});
+      expect(count).toBe(42);
+    });
+
+    it('should return count with search filter', async () => {
+      mockCountDocuments.mockResolvedValue(5);
+
+      const count = await queryToolkit.countWithOptions({ q: 'john' });
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({
+        $or: expect.arrayContaining([
+          { name: { $regex: 'john', $options: 'i' } },
+          { email: { $regex: 'john', $options: 'i' } },
+        ])
+      });
+      expect(count).toBe(5);
+    });
+
+    it('should return count with status filter', async () => {
+      mockCountDocuments.mockResolvedValue(15);
+
+      const count = await queryToolkit.countWithOptions({ status: 'active' });
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({ status: 'active' });
+      expect(count).toBe(15);
+    });
+
+    it('should return count with multiple filters', async () => {
+      mockCountDocuments.mockResolvedValue(8);
+
+      const count = await queryToolkit.countWithOptions({
+        status: 'active',
+        role: 'admin'
+      });
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({
+        status: 'active',
+        role: 'admin'
+      });
+      expect(count).toBe(8);
+    });
+
+    it('should return count with search and filters combined', async () => {
+      mockCountDocuments.mockResolvedValue(3);
+
+      const count = await queryToolkit.countWithOptions({
+        q: 'john',
+        status: 'active'
+      });
+
+      expect(mockCountDocuments).toHaveBeenCalledWith({
+        $or: expect.arrayContaining([
+          { name: { $regex: 'john', $options: 'i' } },
+          { email: { $regex: 'john', $options: 'i' } },
+        ]),
+        status: 'active'
+      });
+      expect(count).toBe(3);
+    });
+
+    it('should ignore pagination options (page, limit, sort, select, populate)', async () => {
+      mockCountDocuments.mockResolvedValue(100);
+
+      const count = await queryToolkit.countWithOptions({
+        status: 'active',
+        page: 2,
+        limit: 50,
+        sort: '-createdAt',
+        select: 'name,email',
+        populate: 'profile'
+      });
+
+      // Should only use the filter, ignoring pagination/sort/select/populate
+      expect(mockCountDocuments).toHaveBeenCalledWith({ status: 'active' });
+      expect(count).toBe(100);
+    });
   });
 });

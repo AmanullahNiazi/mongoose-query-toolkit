@@ -10,6 +10,7 @@ A powerful and flexible toolkit for handling Mongoose queries with support for s
 - 📊 **Sorting**: Sort results by any field (ascending or descending)
 - 🔎 **Field Selection**: Select only the fields you need in the response
 - 🔗 **Population**: Eager-load referenced documents
+- 🔢 **Count Mode**: Get document counts without fetching data
 
 ## Installation
 
@@ -102,6 +103,36 @@ interface PaginationResult<T> {
   hasPrevPage: boolean;   // If there's a previous page
 }
 ```
+
+##### countWithOptions(options)
+
+Get the total count of documents matching the query without fetching the actual documents. This is more efficient than `findWithOptions` when you only need the count.
+
+```typescript
+// Count all active users
+const totalActive = await userQueryToolkit.countWithOptions({
+  status: 'active'
+});
+console.log(totalActive); // 42
+
+// Count with search
+const searchResults = await userQueryToolkit.countWithOptions({
+  q: 'john',
+  status: 'active'
+});
+console.log(searchResults); // 5
+
+// Count with multiple filters
+const adminCount = await userQueryToolkit.countWithOptions({
+  status: 'active',
+  role: 'admin'
+});
+console.log(adminCount); // 3
+```
+
+**Note:** `countWithOptions` supports the same query options as `findWithOptions` (search term `q` and filter fields), but ignores pagination, sorting, field selection, and population options since they don't affect the count.
+
+Returns a promise that resolves to a `number` representing the total count of matching documents.
 
 ## License
 
