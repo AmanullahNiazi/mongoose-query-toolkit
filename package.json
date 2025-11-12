@@ -1,6 +1,6 @@
 {
   "name": "mongoose-query-toolkit",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A toolkit for handling Mongoose queries with support for search, filtering, pagination, sorting, field selection, and population",
   "type": "module",
   "main": "./dist/index.cjs",

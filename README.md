@@ -11,6 +11,7 @@ A powerful and flexible toolkit for handling Mongoose queries with support for s
 - 🔎 **Field Selection**: Select only the fields you need in the response
 - 🔗 **Population**: Eager-load referenced documents
 - 🔢 **Count Mode**: Get document counts without fetching data
+- 📋 **Query Presets**: Define and reuse named query configurations
 
 ## Installation
 
@@ -133,6 +134,107 @@ console.log(adminCount); // 3
 **Note:** `countWithOptions` supports the same query options as `findWithOptions` (search term `q` and filter fields), but ignores pagination, sorting, field selection, and population options since they don't affect the count.
 
 Returns a promise that resolves to a `number` representing the total count of matching documents.
+
+### Query Presets
+
+Define reusable query configurations that can be called by name with optional parameter overrides.
+
+#### definePreset(name, options)
+
+Define a named query preset with specific options.
+
+```typescript
+// Define a preset for active users
+userQueryToolkit.definePreset('activeUsers', {
+  status: 'active',
+  sort: '-createdAt',
+  limit: 20
+});
+
+// Define a preset for admin users
+userQueryToolkit.definePreset('admins', {
+  role: 'admin',
+  sort: 'name'
+});
+
+// Define a complex preset with multiple filters
+userQueryToolkit.definePreset('recentActiveAdmins', {
+  status: 'active',
+  role: 'admin',
+  sort: '-createdAt',
+  limit: 10,
+  select: 'name,email,createdAt'
+});
+```
+
+#### findWithPreset(presetName, overrides?)
+
+Query using a preset with optional parameter overrides.
+
+```typescript
+// Use preset as-is
+const result = await userQueryToolkit.findWithPreset('activeUsers');
+
+// Override pagination
+const page2 = await userQueryToolkit.findWithPreset('activeUsers', {
+  page: 2
+});
+
+// Override multiple options
+const customResult = await userQueryToolkit.findWithPreset('activeUsers', {
+  page: 1,
+  limit: 50,
+  select: 'name,email'
+});
+
+// Add additional filters
+const searchResult = await userQueryToolkit.findWithPreset('activeUsers', {
+  q: 'john'  // Search within active users
+});
+```
+
+#### countWithPreset(presetName, overrides?)
+
+Count documents using a preset with optional overrides.
+
+```typescript
+// Count using preset
+const totalActive = await userQueryToolkit.countWithPreset('activeUsers');
+console.log(totalActive); // 42
+
+// Count with additional filters
+const adminCount = await userQueryToolkit.countWithPreset('activeUsers', {
+  role: 'admin'
+});
+console.log(adminCount); // 8
+```
+
+#### Preset Management Methods
+
+```typescript
+// Check if preset exists
+const exists = userQueryToolkit.hasPreset('activeUsers');
+console.log(exists); // true
+
+// Get preset configuration
+const preset = userQueryToolkit.getPreset('activeUsers');
+console.log(preset); // { status: 'active', sort: '-createdAt', limit: 20 }
+
+// List all preset names
+const presets = userQueryToolkit.listPresets();
+console.log(presets); // ['activeUsers', 'admins', 'recentActiveAdmins']
+
+// Delete a preset
+const deleted = userQueryToolkit.deletePreset('activeUsers');
+console.log(deleted); // true
+```
+
+**Benefits of Presets:**
+- **Consistency**: Ensure same query logic is used across your application
+- **Reusability**: Define once, use anywhere
+- **Maintainability**: Update query logic in one place
+- **Flexibility**: Override any preset option when needed
+- **Type Safety**: Full TypeScript support with intellisense
 
 ## License
 

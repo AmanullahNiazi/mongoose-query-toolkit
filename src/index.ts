@@ -25,6 +25,7 @@ export class QueryToolkit<T extends Document> {
   private filterableFields: string[];
   private selectableFields: string[];
   private populatableFields: string[] = [];
+  private presets: Map<string, QueryOptions> = new Map();
 
   constructor(
     private readonly model: Model<T>,
@@ -170,5 +171,57 @@ export class QueryToolkit<T extends Document> {
     };
 
     return this.model.countDocuments(query);
+  }
+
+  definePreset(name: string, options: QueryOptions): void {
+    this.presets.set(name, { ...options });
+  }
+
+  getPreset(name: string): QueryOptions | undefined {
+    return this.presets.get(name);
+  }
+
+  hasPreset(name: string): boolean {
+    return this.presets.has(name);
+  }
+
+  deletePreset(name: string): boolean {
+    return this.presets.delete(name);
+  }
+
+  listPresets(): string[] {
+    return Array.from(this.presets.keys());
+  }
+
+  async findWithPreset(
+    presetName: string,
+    overrides: QueryOptions = {}
+  ): Promise<PaginationResult<T>> {
+    const preset = this.presets.get(presetName);
+
+    if (!preset) {
+      throw new Error(`Preset "${presetName}" not found. Available presets: ${this.listPresets().join(', ') || 'none'}`);
+    }
+
+    // Merge preset with overrides (overrides take precedence)
+    const mergedOptions = { ...preset, ...overrides };
+
+    return this.findWithOptions(mergedOptions);
+  }
+
+  async countWithPreset(
+    presetName: string,
+    overrides: QueryOptions = {}
+  ): Promise<number> {
+    const preset = this.presets.get(presetName);
+
+    if (!preset) {
+      throw new Error(`Preset "${presetName}" not found. Available presets: ${this.listPresets().join(', ') || 'none'}`);
+    }
+
+    // Merge preset with overrides (overrides take precedence)
+    const mergedOptions = { ...preset, ...overrides };
+
+    return this.countWithOptions(mergedOptions);
   }
 }

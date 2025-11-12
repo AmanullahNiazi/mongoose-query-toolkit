@@ -316,4 +316,231 @@ describe('QueryToolkit', () => {
       expect(count).toBe(100);
     });
   });
+
+  describe('Query Presets', () => {
+    describe('definePreset', () => {
+      it('should define a new preset', () => {
+        queryToolkit.definePreset('activeUsers', { status: 'active', sort: '-createdAt' });
+
+        expect(queryToolkit.hasPreset('activeUsers')).toBe(true);
+      });
+
+      it('should allow defining multiple presets', () => {
+        queryToolkit.definePreset('activeUsers', { status: 'active' });
+        queryToolkit.definePreset('admins', { role: 'admin' });
+
+        expect(queryToolkit.hasPreset('activeUsers')).toBe(true);
+        expect(queryToolkit.hasPreset('admins')).toBe(true);
+      });
+
+      it('should overwrite existing preset with same name', () => {
+        queryToolkit.definePreset('test', { status: 'active' });
+        queryToolkit.definePreset('test', { status: 'inactive' });
+
+        const preset = queryToolkit.getPreset('test');
+        expect(preset?.status).toBe('inactive');
+      });
+    });
+
+    describe('getPreset', () => {
+      it('should return preset options', () => {
+        const options = { status: 'active', sort: '-createdAt', limit: 20 };
+        queryToolkit.definePreset('activeUsers', options);
+
+        const preset = queryToolkit.getPreset('activeUsers');
+        expect(preset).toEqual(options);
+      });
+
+      it('should return undefined for non-existent preset', () => {
+        const preset = queryToolkit.getPreset('nonExistent');
+        expect(preset).toBeUndefined();
+      });
+    });
+
+    describe('hasPreset', () => {
+      it('should return true for existing preset', () => {
+        queryToolkit.definePreset('test', { status: 'active' });
+        expect(queryToolkit.hasPreset('test')).toBe(true);
+      });
+
+      it('should return false for non-existent preset', () => {
+        expect(queryToolkit.hasPreset('nonExistent')).toBe(false);
+      });
+    });
+
+    describe('deletePreset', () => {
+      it('should delete existing preset', () => {
+        queryToolkit.definePreset('test', { status: 'active' });
+
+        const deleted = queryToolkit.deletePreset('test');
+        expect(deleted).toBe(true);
+        expect(queryToolkit.hasPreset('test')).toBe(false);
+      });
+
+      it('should return false when deleting non-existent preset', () => {
+        const deleted = queryToolkit.deletePreset('nonExistent');
+        expect(deleted).toBe(false);
+      });
+    });
+
+    describe('listPresets', () => {
+      it('should return empty array when no presets defined', () => {
+        // Clean up any presets from previous tests
+        queryToolkit.listPresets().forEach(name => queryToolkit.deletePreset(name));
+
+        const presets = queryToolkit.listPresets();
+        expect(presets).toEqual([]);
+      });
+
+      it('should return all preset names', () => {
+        // Clean up first
+        queryToolkit.listPresets().forEach(name => queryToolkit.deletePreset(name));
+
+        queryToolkit.definePreset('preset1', { status: 'active' });
+        queryToolkit.definePreset('preset2', { role: 'admin' });
+        queryToolkit.definePreset('preset3', { status: 'inactive' });
+
+        const presets = queryToolkit.listPresets();
+        expect(presets).toHaveLength(3);
+        expect(presets).toContain('preset1');
+        expect(presets).toContain('preset2');
+        expect(presets).toContain('preset3');
+      });
+    });
+
+    describe('findWithPreset', () => {
+      beforeEach(() => {
+        // Clean up presets before each test
+        queryToolkit.listPresets().forEach(name => queryToolkit.deletePreset(name));
+
+        // Define test presets
+        queryToolkit.definePreset('activeUsers', {
+          status: 'active',
+          sort: '-createdAt',
+          limit: 20
+        });
+      });
+
+      it('should use preset options', async () => {
+        mockExec.mockResolvedValue([{ name: 'User 1' }]);
+        mockCountDocuments.mockResolvedValue(5);
+
+        await queryToolkit.findWithPreset('activeUsers');
+
+        expect(mockFind).toHaveBeenCalledWith({ status: 'active' });
+        expect(mockSort).toHaveBeenCalledWith({ createdAt: -1 });
+        expect(mockSkip().limit).toHaveBeenCalledWith(20);
+      });
+
+      it('should allow overriding preset options', async () => {
+        mockExec.mockResolvedValue([{ name: 'User 1' }]);
+        mockCountDocuments.mockResolvedValue(5);
+
+        await queryToolkit.findWithPreset('activeUsers', { page: 2, limit: 10 });
+
+        expect(mockFind).toHaveBeenCalledWith({ status: 'active' });
+        expect(mockSkip).toHaveBeenCalledWith(10); // page 2 with limit 10
+        expect(mockSkip().limit).toHaveBeenCalledWith(10); // override limit
+      });
+
+      it('should throw error for non-existent preset', async () => {
+        await expect(
+          queryToolkit.findWithPreset('nonExistent')
+        ).rejects.toThrow('Preset "nonExistent" not found');
+      });
+
+      it('should list available presets in error message', async () => {
+        // Clean up first to ensure no other presets interfere
+        queryToolkit.listPresets().forEach(name => queryToolkit.deletePreset(name));
+
+        queryToolkit.definePreset('preset1', { status: 'active' });
+        queryToolkit.definePreset('preset2', { role: 'admin' });
+
+        try {
+          await queryToolkit.findWithPreset('nonExistent');
+          fail('Should have thrown an error');
+        } catch (error: any) {
+          expect(error.message).toContain('Preset "nonExistent" not found');
+          expect(error.message).toContain('Available presets:');
+          expect(error.message).toContain('preset1');
+          expect(error.message).toContain('preset2');
+        }
+      });
+
+      it('should merge preset filters with override filters', async () => {
+        queryToolkit.definePreset('activeAdmins', {
+          status: 'active',
+          role: 'admin'
+        });
+
+        mockExec.mockResolvedValue([]);
+        mockCountDocuments.mockResolvedValue(0);
+
+        await queryToolkit.findWithPreset('activeAdmins', { q: 'john' });
+
+        expect(mockFind).toHaveBeenCalledWith({
+          $or: expect.arrayContaining([
+            { name: { $regex: 'john', $options: 'i' } },
+            { email: { $regex: 'john', $options: 'i' } },
+          ]),
+          status: 'active',
+          role: 'admin'
+        });
+      });
+    });
+
+    describe('countWithPreset', () => {
+      beforeEach(() => {
+        // Clean up presets before each test
+        queryToolkit.listPresets().forEach(name => queryToolkit.deletePreset(name));
+
+        // Define test presets
+        queryToolkit.definePreset('activeUsers', { status: 'active' });
+      });
+
+      it('should use preset options for counting', async () => {
+        mockCountDocuments.mockResolvedValue(42);
+
+        const count = await queryToolkit.countWithPreset('activeUsers');
+
+        expect(mockCountDocuments).toHaveBeenCalledWith({ status: 'active' });
+        expect(count).toBe(42);
+      });
+
+      it('should allow overriding preset options', async () => {
+        mockCountDocuments.mockResolvedValue(15);
+
+        const count = await queryToolkit.countWithPreset('activeUsers', { role: 'admin' });
+
+        expect(mockCountDocuments).toHaveBeenCalledWith({
+          status: 'active',
+          role: 'admin'
+        });
+        expect(count).toBe(15);
+      });
+
+      it('should throw error for non-existent preset', async () => {
+        await expect(
+          queryToolkit.countWithPreset('nonExistent')
+        ).rejects.toThrow('Preset "nonExistent" not found');
+      });
+
+      it('should ignore pagination options in preset', async () => {
+        queryToolkit.definePreset('paginatedActive', {
+          status: 'active',
+          page: 2,
+          limit: 50,
+          sort: '-createdAt'
+        });
+
+        mockCountDocuments.mockResolvedValue(100);
+
+        const count = await queryToolkit.countWithPreset('paginatedActive');
+
+        // Should only use filter, not pagination
+        expect(mockCountDocuments).toHaveBeenCalledWith({ status: 'active' });
+        expect(count).toBe(100);
+      });
+    });
+  });
 });
