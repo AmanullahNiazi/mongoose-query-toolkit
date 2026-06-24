@@ -6,28 +6,57 @@ import { QueryToolkit } from '../index.js';
 const mockExec = jest.fn();
 const mockSkip = jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ exec: mockExec }) });
 const mockLimit = jest.fn().mockReturnValue({ exec: mockExec });
-const mockPopulate = jest.fn().mockImplementation(function() {
-  return { 
-    skip: mockSkip, 
-    limit: mockLimit, 
+const mockLean = jest.fn().mockImplementation(function() {
+  return {
+    skip: mockSkip,
+    limit: mockLimit,
     exec: mockExec,
     populate: mockPopulate,
     sort: mockSort,
-    select: mockSelect
+    select: mockSelect,
+    lean: mockLean,
+  };
+});
+const mockPopulate = jest.fn().mockImplementation(function() {
+  return {
+    skip: mockSkip,
+    limit: mockLimit,
+    exec: mockExec,
+    populate: mockPopulate,
+    sort: mockSort,
+    select: mockSelect,
+    lean: mockLean,
   };
 });
 const mockSort = jest.fn().mockImplementation(function() {
-  return { 
-    skip: mockSkip, 
+  return {
+    skip: mockSkip,
     populate: mockPopulate,
     select: mockSelect,
     limit: mockLimit,
-    exec: mockExec
+    exec: mockExec,
+    lean: mockLean,
   };
 });
-const mockSelect = jest.fn().mockReturnValue({ sort: mockSort, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec });
-const mockFind = jest.fn().mockReturnValue({ sort: mockSort, select: mockSelect, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec });
+const mockSelect = jest.fn().mockReturnValue({ sort: mockSort, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec, lean: mockLean });
+const mockFind = jest.fn().mockReturnValue({ sort: mockSort, select: mockSelect, skip: mockSkip, populate: mockPopulate, limit: mockLimit, exec: mockExec, lean: mockLean });
 const mockCountDocuments = jest.fn().mockResolvedValue(0);
+
+// findOne returns a chainable that ends in exec()
+const mockFindOneExec = jest.fn();
+const mockFindOneChain: any = {
+  sort: jest.fn(),
+  select: jest.fn(),
+  populate: jest.fn(),
+  lean: jest.fn(),
+  exec: mockFindOneExec,
+};
+mockFindOneChain.sort.mockReturnValue(mockFindOneChain);
+mockFindOneChain.select.mockReturnValue(mockFindOneChain);
+mockFindOneChain.populate.mockReturnValue(mockFindOneChain);
+mockFindOneChain.lean.mockReturnValue(mockFindOneChain);
+const mockFindOne = jest.fn().mockReturnValue(mockFindOneChain);
+const mockExists = jest.fn();
 
 interface TestUser extends Document {
   name: string;
@@ -45,6 +74,8 @@ describe('QueryToolkit', () => {
     // Create a mock UserModel
     UserModel = {
       find: mockFind,
+      findOne: mockFindOne,
+      exists: mockExists,
       countDocuments: mockCountDocuments,
     };
 
@@ -63,6 +94,15 @@ describe('QueryToolkit', () => {
     // Setup default mock return values
     mockExec.mockResolvedValue([]);
     mockCountDocuments.mockResolvedValue(0);
+    mockFindOneExec.mockResolvedValue(null);
+    mockExists.mockResolvedValue(null);
+
+    // Re-wire findOne chain (cleared by clearAllMocks)
+    mockFindOneChain.sort.mockReturnValue(mockFindOneChain);
+    mockFindOneChain.select.mockReturnValue(mockFindOneChain);
+    mockFindOneChain.populate.mockReturnValue(mockFindOneChain);
+    mockFindOneChain.lean.mockReturnValue(mockFindOneChain);
+    mockFindOne.mockReturnValue(mockFindOneChain);
   });
 
   it('should search users by name or email', async () => {
@@ -195,8 +235,8 @@ describe('QueryToolkit', () => {
     await queryToolkit.findWithOptions({ populate: 'profile,posts' });
     
     // Verify populate was called for each field
-    expect(mockPopulate).toHaveBeenCalledWith('profile');
-    expect(mockPopulate).toHaveBeenCalledWith('posts');
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'profile' });
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'posts' });
   });
 
   it('should only populate fields that are in populatableFields', async () => {
@@ -211,9 +251,9 @@ describe('QueryToolkit', () => {
     await limitedQueryToolkit.findWithOptions({ populate: 'profile,posts,comments' });
     
     // Verify populate was called only for the populatable field
-    expect(mockPopulate).toHaveBeenCalledWith('profile');
-    expect(mockPopulate).not.toHaveBeenCalledWith('posts');
-    expect(mockPopulate).not.toHaveBeenCalledWith('comments');
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'profile' });
+    expect(mockPopulate).not.toHaveBeenCalledWith({ path: 'posts' });
+    expect(mockPopulate).not.toHaveBeenCalledWith({ path: 'comments' });
   });
 
   it('should allow all populate fields if populatableFields is empty', async () => {
@@ -228,9 +268,9 @@ describe('QueryToolkit', () => {
     await openQueryToolkit.findWithOptions({ populate: 'profile,posts,comments' });
     
     // Verify populate was called for all fields
-    expect(mockPopulate).toHaveBeenCalledWith('profile');
-    expect(mockPopulate).toHaveBeenCalledWith('posts');
-    expect(mockPopulate).toHaveBeenCalledWith('comments');
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'profile' });
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'posts' });
+    expect(mockPopulate).toHaveBeenCalledWith({ path: 'comments' });
   });
 
   describe('Security & input validation', () => {
@@ -251,12 +291,12 @@ describe('QueryToolkit', () => {
       expect(mockFind).toHaveBeenCalledWith({});
     });
 
-    it('should allow primitive and array filter values', async () => {
+    it('should convert array filter values to $in', async () => {
       await queryToolkit.findWithOptions({ status: 'active', role: ['admin', 'user'] as any });
 
       expect(mockFind).toHaveBeenCalledWith({
         status: 'active',
-        role: ['admin', 'user'],
+        role: { $in: ['admin', 'user'] },
       });
     });
 
@@ -293,6 +333,246 @@ describe('QueryToolkit', () => {
       await tk.findWithOptions({ select: 'name,-email' });
 
       expect(mockSelect).toHaveBeenCalledWith('name');
+    });
+  });
+
+  describe('Operator & multi-value filters', () => {
+    it('should map whitelisted operators to MongoDB operators', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['age', 'score'],
+      });
+
+      await tk.findWithOptions({
+        age: { gte: 18, lte: 65 } as any,
+        score: { gt: 100 } as any,
+      });
+
+      expect(mockFind).toHaveBeenCalledWith({
+        age: { $gte: 18, $lte: 65 },
+        score: { $gt: 100 },
+      });
+    });
+
+    it('should drop unknown/unsafe operators', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['age'],
+      });
+
+      await tk.findWithOptions({
+        age: { gte: 18, $where: 'malicious', $function: 'x' } as any,
+      });
+
+      expect(mockFind).toHaveBeenCalledWith({ age: { $gte: 18 } });
+    });
+
+    it('should keep comma-containing strings as exact match by default', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['company'],
+      });
+
+      await tk.findWithOptions({ company: 'Smith, Jones & Co' });
+
+      expect(mockFind).toHaveBeenCalledWith({ company: 'Smith, Jones & Co' });
+    });
+
+    it('should convert comma-separated string to $in when splitCommaValues is enabled', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['status'],
+        splitCommaValues: true,
+      });
+
+      await tk.findWithOptions({ status: 'active,pending' });
+
+      expect(mockFind).toHaveBeenCalledWith({ status: { $in: ['active', 'pending'] } });
+    });
+
+    it('should drop inherited prototype keys instead of treating them as operators', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['age'],
+      });
+
+      await tk.findWithOptions({ age: { constructor: '1', toString: 'x', gte: 18 } as any });
+
+      // Only the whitelisted `gte` survives; constructor/toString are dropped.
+      expect(mockFind).toHaveBeenCalledWith({ age: { $gte: 18 } });
+    });
+
+    it('should handle in operator with array', async () => {
+      const tk = new QueryToolkit(UserModel as any, {
+        filterableFields: ['role'],
+      });
+
+      await tk.findWithOptions({ role: { in: ['admin', 'user'] } as any });
+
+      expect(mockFind).toHaveBeenCalledWith({ role: { $in: ['admin', 'user'] } });
+    });
+  });
+
+  describe('lean option', () => {
+    it('should call lean() when lean is true', async () => {
+      await queryToolkit.findWithOptions({ lean: true });
+      expect(mockLean).toHaveBeenCalled();
+    });
+
+    it('should not call lean() by default', async () => {
+      await queryToolkit.findWithOptions({});
+      expect(mockLean).not.toHaveBeenCalled();
+    });
+
+    it('should call lean() when configured as default', async () => {
+      const tk = new QueryToolkit(UserModel as any, { lean: true });
+      await tk.findWithOptions({});
+      expect(mockLean).toHaveBeenCalled();
+    });
+  });
+
+  describe('text search mode', () => {
+    it('should build a $text query when searchMode is text', async () => {
+      const tk = new QueryToolkit(UserModel as any, { searchMode: 'text' });
+
+      await tk.findWithOptions({ q: 'hello world' });
+
+      expect(mockFind).toHaveBeenCalledWith({ $text: { $search: 'hello world' } });
+    });
+  });
+
+  describe('populate with field selection', () => {
+    it('should parse path:field syntax into a populate config', async () => {
+      const tk = new QueryToolkit(UserModel as any);
+
+      await tk.findWithOptions({ populate: 'profile:name,avatar' });
+
+      expect(mockPopulate).toHaveBeenCalledWith({ path: 'profile', select: 'name avatar' });
+    });
+
+    it('should parse multiple populates separated by semicolons', async () => {
+      const tk = new QueryToolkit(UserModel as any);
+
+      await tk.findWithOptions({ populate: 'profile:name;posts:title,body' });
+
+      expect(mockPopulate).toHaveBeenCalledWith({ path: 'profile', select: 'name' });
+      expect(mockPopulate).toHaveBeenCalledWith({ path: 'posts', select: 'title body' });
+    });
+  });
+
+  describe('findOne', () => {
+    it('should return a single matching document', async () => {
+      const user = { name: 'John', email: 'john@example.com' };
+      mockFindOneExec.mockResolvedValue(user);
+
+      const result = await queryToolkit.findOne({ status: 'active' });
+
+      expect(mockFindOne).toHaveBeenCalledWith({ status: 'active' });
+      expect(result).toEqual(user);
+    });
+
+    it('should return null when no document matches', async () => {
+      mockFindOneExec.mockResolvedValue(null);
+
+      const result = await queryToolkit.findOne({ q: 'nobody' });
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('exists', () => {
+    it('should return true when a document matches', async () => {
+      mockExists.mockResolvedValue({ _id: 'abc' });
+
+      const result = await queryToolkit.exists({ status: 'active' });
+
+      expect(mockExists).toHaveBeenCalledWith({ status: 'active' });
+      expect(result).toBe(true);
+    });
+
+    it('should return false when no document matches', async () => {
+      mockExists.mockResolvedValue(null);
+
+      const result = await queryToolkit.exists({ status: 'ghost' });
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('findWithCursor', () => {
+    it('should sort ascending by _id and fetch limit+1 without a cursor', async () => {
+      const docs = Array.from({ length: 6 }, (_, i) => ({ _id: `id${i}`, name: `User ${i}` }));
+      mockExec.mockResolvedValue(docs); // 6 returned for limit 5 => hasNextPage
+
+      const result = await queryToolkit.findWithCursor({ limit: 5 });
+
+      expect(mockSort).toHaveBeenCalledWith({ _id: 1 });
+      expect(mockLimit).toHaveBeenCalledWith(6); // limit + 1
+      expect(result.docs).toHaveLength(5);
+      expect(result.hasNextPage).toBe(true);
+      expect(result.nextCursor).toBe('id4'); // last of the 5 returned
+    });
+
+    it('should add a cursor condition when cursor is provided', async () => {
+      mockExec.mockResolvedValue([]);
+
+      await queryToolkit.findWithCursor({ limit: 5, cursor: 'id4' });
+
+      expect(mockFind).toHaveBeenCalledWith({ _id: { $gt: 'id4' } });
+    });
+
+    it('should use $lt and descending sort for desc direction', async () => {
+      mockExec.mockResolvedValue([]);
+
+      await queryToolkit.findWithCursor({ limit: 5, cursor: 'id4', direction: 'desc' });
+
+      expect(mockFind).toHaveBeenCalledWith({ _id: { $lt: 'id4' } });
+      expect(mockSort).toHaveBeenCalledWith({ _id: -1 });
+    });
+
+    it('should report no next page when fewer than limit+1 returned', async () => {
+      mockExec.mockResolvedValue([{ _id: 'id0' }, { _id: 'id1' }]);
+
+      const result = await queryToolkit.findWithCursor({ limit: 5 });
+
+      expect(result.hasNextPage).toBe(false);
+      expect(result.nextCursor).toBeNull();
+      expect(result.docs).toHaveLength(2);
+    });
+
+    it('should support a custom cursor field', async () => {
+      mockExec.mockResolvedValue([]);
+
+      await queryToolkit.findWithCursor({ limit: 5, cursor: '100', cursorField: 'score', direction: 'desc' });
+
+      expect(mockFind).toHaveBeenCalledWith({ score: { $lt: '100' } });
+      expect(mockSort).toHaveBeenCalledWith({ score: -1 });
+    });
+
+    it('should merge a filter and cursor on the same field with $and instead of overwriting', async () => {
+      const tk = new QueryToolkit(UserModel as any, { filterableFields: ['score'] });
+      mockExec.mockResolvedValue([]);
+
+      await tk.findWithCursor({
+        limit: 5,
+        cursorField: 'score',
+        score: { gte: 50 } as any,
+        cursor: '100',
+        direction: 'desc',
+      });
+
+      expect(mockFind).toHaveBeenCalledWith({
+        $and: [{ score: { $gte: 50 } }, { score: { $lt: '100' } }],
+      });
+    });
+
+    it('should encode a Date cursor losslessly via ISO string', async () => {
+      const ts = new Date('2024-01-02T03:04:05.678Z');
+      mockExec.mockResolvedValue([
+        { _id: 'a', createdAt: new Date('2024-01-01T00:00:00.000Z') },
+        { _id: 'b', createdAt: ts },
+        { _id: 'c' }, // extra doc => hasNextPage
+      ]);
+
+      const result = await queryToolkit.findWithCursor({ limit: 2, cursorField: 'createdAt' });
+
+      expect(result.hasNextPage).toBe(true);
+      expect(result.nextCursor).toBe('2024-01-02T03:04:05.678Z');
     });
   });
 
@@ -528,6 +808,19 @@ describe('QueryToolkit', () => {
           expect(error.message).toContain('preset1');
           expect(error.message).toContain('preset2');
         }
+      });
+
+      it('should deep-merge operator-object filters from preset and overrides', async () => {
+        const tk = new QueryToolkit(UserModel as any, { filterableFields: ['price'] });
+        tk.definePreset('cheap', { price: { gte: 10 } as any });
+
+        mockExec.mockResolvedValue([]);
+        mockCountDocuments.mockResolvedValue(0);
+
+        await tk.findWithPreset('cheap', { price: { lte: 100 } as any });
+
+        // The preset's gte bound must survive the override's lte bound.
+        expect(mockFind).toHaveBeenCalledWith({ price: { $gte: 10, $lte: 100 } });
       });
 
       it('should merge preset filters with override filters', async () => {

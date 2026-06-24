@@ -4,14 +4,17 @@ A powerful and flexible toolkit for handling Mongoose queries with support for s
 
 ## Features
 
-- 🔍 **Search**: Easily search across multiple fields
-- 🔁 **Filtering**: Filter documents by any field
-- 📄 **Pagination**: Built-in pagination support
+- 🔍 **Search**: Easily search across multiple fields (regex or `$text` index mode)
+- 🔁 **Filtering**: Exact-match, multi-value (`$in`), and operator filters (`gte`, `lte`, `ne`, ...)
+- 📄 **Pagination**: Offset-based and cursor-based (keyset) pagination
 - 📊 **Sorting**: Sort results by any field (ascending or descending)
 - 🔎 **Field Selection**: Select only the fields you need in the response
-- 🔗 **Population**: Eager-load referenced documents
+- 🔗 **Population**: Eager-load referenced documents, with optional per-path field selection
+- ⚡ **Lean Queries**: Return plain JS objects for faster read-only responses
 - 🔢 **Count Mode**: Get document counts without fetching data
+- 🎯 **Single-document helpers**: `findOne` and `exists`
 - 📋 **Query Presets**: Define and reuse named query configurations
+- 🛡️ **Hardened**: Regex/NoSQL-injection safe with bounded pagination
 
 ## Installation
 
@@ -76,6 +79,9 @@ new QueryToolkit(model, options)
   - `populatableFields`: Array of fields that can be populated (if empty, all fields can be populated)
   - `defaultLimit`: Default page size when `limit` is omitted or invalid (default: `10`)
   - `maxLimit`: Maximum allowed page size; larger `limit` values are clamped to this (default: `100`)
+  - `searchMode`: `'regex'` (default) or `'text'` to use a MongoDB `$text` index for search
+  - `lean`: When `true`, all queries return plain JS objects by default (default: `false`)
+  - `splitCommaValues`: When `true`, a comma-separated filter string (e.g. `status=active,pending`) is treated as a multi-value `$in`. Off by default so values that legitimately contain commas keep exact-match semantics (default: `false`)
 
 #### Security & input handling
 
@@ -145,6 +151,157 @@ console.log(adminCount); // 3
 **Note:** `countWithOptions` supports the same query options as `findWithOptions` (search term `q` and filter fields), but ignores pagination, sorting, field selection, and population options since they don't affect the count.
 
 Returns a promise that resolves to a `number` representing the total count of matching documents.
+
+### Advanced Filtering
+
+#### Multi-value filters (`$in`)
+
+Pass an array for any filterable field to match multiple values:
+
+```typescript
+await userQueryToolkit.findWithOptions({ status: ['active', 'pending'] });
+// → { status: { $in: ['active', 'pending'] } }
+```
+
+To accept comma-separated strings (e.g. from a query string `?status=active,pending`),
+enable `splitCommaValues` in the constructor. It is **off by default** so that values
+which legitimately contain commas (names, addresses) keep exact-match semantics:
+
+```typescript
+const toolkit = new QueryToolkit(User, {
+  filterableFields: ['status'],
+  splitCommaValues: true,
+});
+await toolkit.findWithOptions({ status: 'active,pending' });
+// → { status: { $in: ['active', 'pending'] } }
+```
+
+Alternatively, use the explicit `in` operator (see below) regardless of this setting.
+
+#### Operator filters
+
+Pass an object of operators for ranges and comparisons. Only a safe, whitelisted
+set of operators is allowed — anything else (including raw `$`-prefixed keys) is
+silently dropped to prevent NoSQL injection.
+
+| Public operator | MongoDB |
+| --------------- | ------- |
+| `eq`            | `$eq`   |
+| `ne`            | `$ne`   |
+| `gt`            | `$gt`   |
+| `gte`           | `$gte`  |
+| `lt`            | `$lt`   |
+| `lte`           | `$lte`  |
+| `in`            | `$in`   |
+| `nin`           | `$nin`  |
+
+```typescript
+await productQueryToolkit.findWithOptions({
+  price: { gte: 10, lte: 100 },          // price between 10 and 100
+  createdAt: { gte: '2024-01-01' },      // date range
+  category: { in: ['books', 'music'] },
+});
+```
+
+### Lean Queries
+
+Return plain JavaScript objects instead of Mongoose documents for faster,
+read-only responses. Enable per-query or globally via the constructor.
+
+```typescript
+await userQueryToolkit.findWithOptions({ status: 'active', lean: true });
+```
+
+### Cursor-based Pagination
+
+For large collections, cursor (keyset) pagination avoids the performance cost of
+large `skip` offsets. Pass the returned `nextCursor` back in to fetch the next page.
+
+```typescript
+const page1 = await userQueryToolkit.findWithCursor({ limit: 20 });
+// page1 => { docs, limit, nextCursor, hasNextPage }
+
+if (page1.hasNextPage) {
+  const page2 = await userQueryToolkit.findWithCursor({
+    limit: 20,
+    cursor: page1.nextCursor,
+  });
+}
+
+// Custom cursor field and direction
+await userQueryToolkit.findWithCursor({
+  limit: 20,
+  cursorField: 'createdAt',
+  direction: 'desc',
+});
+```
+
+```typescript
+interface CursorResult<T> {
+  docs: T[];
+  limit: number;
+  nextCursor: string | null;  // pass back as `cursor` for the next page
+  hasNextPage: boolean;
+}
+```
+
+### Text-index Search
+
+When the collection has a MongoDB text index, set `searchMode: 'text'` to use
+`$text` search instead of regex — faster and index-backed on large datasets.
+
+```typescript
+const toolkit = new QueryToolkit(Article, { searchMode: 'text' });
+await toolkit.findWithOptions({ q: 'mongoose pagination' });
+// → { $text: { $search: 'mongoose pagination' } }
+```
+
+### Populate with Field Selection
+
+Select specific fields on populated paths using `path:field1,field2`. The grammar
+is deterministic:
+
+- **`;`** always separates populated paths
+- **`,`** separates the selected fields of a single path
+
+```typescript
+await userQueryToolkit.findWithOptions({
+  populate: 'profile:name,avatar;posts:title,createdAt',
+});
+```
+
+Plain comma-separated populate (when no `:` is used) continues to work as a list
+of paths:
+
+```typescript
+await userQueryToolkit.findWithOptions({ populate: 'profile,posts' });
+```
+
+> **Security note:** `populatableFields` whitelists which *paths* may be
+> populated — this is the security boundary. The per-path field selection
+> (`profile:...`) is **not** itself whitelisted, so do not add a relation to
+> `populatableFields` if its referenced documents contain sensitive fields you
+> don't want clients to project. Restrict populatable paths to safe relations,
+> or omit `populatableFields` only in trusted/server-side contexts.
+
+### Single-document Helpers
+
+#### findOne(options)
+
+Returns the first document matching the search/filter options (or `null`).
+Supports `select`, `populate`, `sort`, and `lean`.
+
+```typescript
+const user = await userQueryToolkit.findOne({ q: 'john', status: 'active' });
+```
+
+#### exists(options)
+
+Returns `true` if at least one matching document exists.
+
+```typescript
+const taken = await userQueryToolkit.exists({ email: 'john@example.com' });
+```
 
 ### Query Presets
 
