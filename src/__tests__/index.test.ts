@@ -233,6 +233,69 @@ describe('QueryToolkit', () => {
     expect(mockPopulate).toHaveBeenCalledWith('comments');
   });
 
+  describe('Security & input validation', () => {
+    it('should escape regex special characters in search to prevent ReDoS/injection', async () => {
+      await queryToolkit.findWithOptions({ q: 'a.*+?(b)[c]' });
+
+      expect(mockFind).toHaveBeenCalledWith({
+        $or: expect.arrayContaining([
+          { name: { $regex: 'a\\.\\*\\+\\?\\(b\\)\\[c\\]', $options: 'i' } },
+          { email: { $regex: 'a\\.\\*\\+\\?\\(b\\)\\[c\\]', $options: 'i' } },
+        ]),
+      });
+    });
+
+    it('should reject object filter values to prevent NoSQL operator injection', async () => {
+      await queryToolkit.findWithOptions({ status: { $ne: null } as any });
+
+      expect(mockFind).toHaveBeenCalledWith({});
+    });
+
+    it('should allow primitive and array filter values', async () => {
+      await queryToolkit.findWithOptions({ status: 'active', role: ['admin', 'user'] as any });
+
+      expect(mockFind).toHaveBeenCalledWith({
+        status: 'active',
+        role: ['admin', 'user'],
+      });
+    });
+
+    it('should clamp limit to maxLimit', async () => {
+      const tk = new QueryToolkit(UserModel as any, { maxLimit: 50 });
+
+      const result = await tk.findWithOptions({ limit: 100000 });
+
+      expect(mockSkip().limit).toHaveBeenCalledWith(50);
+      expect(result.limit).toBe(50);
+    });
+
+    it('should coerce string pagination params and floor negatives to page 1', async () => {
+      const result = await queryToolkit.findWithOptions({
+        page: '-3' as any,
+        limit: '5' as any,
+      });
+
+      expect(mockSkip).toHaveBeenCalledWith(0); // page forced to 1 -> skip 0
+      expect(mockSkip().limit).toHaveBeenCalledWith(5);
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(5);
+    });
+
+    it('should fall back to defaultLimit for non-numeric limit', async () => {
+      const result = await queryToolkit.findWithOptions({ limit: 'abc' as any });
+
+      expect(result.limit).toBe(10);
+    });
+
+    it('should drop exclusion fields when mixed with inclusion fields', async () => {
+      const tk = new QueryToolkit(UserModel as any);
+
+      await tk.findWithOptions({ select: 'name,-email' });
+
+      expect(mockSelect).toHaveBeenCalledWith('name');
+    });
+  });
+
   describe('countWithOptions', () => {
     it('should return count of all documents', async () => {
       mockCountDocuments.mockResolvedValue(42);

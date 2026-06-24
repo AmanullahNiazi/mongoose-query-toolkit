@@ -74,6 +74,17 @@ new QueryToolkit(model, options)
   - `filterableFields`: Array of fields that can be filtered
   - `selectableFields`: Array of fields that can be selected (if empty, all fields can be selected)
   - `populatableFields`: Array of fields that can be populated (if empty, all fields can be populated)
+  - `defaultLimit`: Default page size when `limit` is omitted or invalid (default: `10`)
+  - `maxLimit`: Maximum allowed page size; larger `limit` values are clamped to this (default: `100`)
+
+#### Security & input handling
+
+The toolkit is hardened against common API abuse:
+
+- **Regex injection / ReDoS**: search terms are escaped before being used in `$regex`, so special characters cannot break or hang the query.
+- **NoSQL operator injection**: filter values must be primitives or arrays of primitives. Object values (e.g. `?status[$ne]=active`) are rejected, preventing operator injection on whitelisted fields.
+- **Pagination bounds**: `page` and `limit` are coerced from strings, `page` is forced to `>= 1`, and `limit` is clamped to `[1, maxLimit]` to prevent unbounded collection scans.
+- **Select safety**: mixing inclusion and exclusion fields (which MongoDB rejects) is normalized by dropping exclusions in favor of inclusions.
 
 #### Methods
 

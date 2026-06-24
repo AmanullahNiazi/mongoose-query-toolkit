@@ -25,6 +25,8 @@ export class QueryToolkit<T extends Document> {
   private filterableFields: string[];
   private selectableFields: string[];
   private populatableFields: string[] = [];
+  private defaultLimit: number;
+  private maxLimit: number;
   private presets: Map<string, QueryOptions> = new Map();
 
   constructor(
@@ -34,20 +36,34 @@ export class QueryToolkit<T extends Document> {
       filterableFields?: string[];
       selectableFields?: string[];
       populatableFields?: string[];
+      defaultLimit?: number;
+      maxLimit?: number;
     } = {}
   ) {
     this.searchFields = options.searchFields || [];
     this.filterableFields = options.filterableFields || [];
     this.selectableFields = options.selectableFields || [];
     this.populatableFields = options.populatableFields || [];
+    this.defaultLimit = options.defaultLimit ?? 10;
+    this.maxLimit = options.maxLimit ?? 100;
+  }
+
+  /**
+   * Escapes regex special characters to prevent regex injection and
+   * catastrophic backtracking (ReDoS) from user-supplied search terms.
+   */
+  private escapeRegex(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private buildSearchQuery(q: string): object {
     if (!q || !this.searchFields.length) return {};
 
+    const safe = this.escapeRegex(q);
+
     return {
       $or: this.searchFields.map((field) => ({
-        [field]: { $regex: q, $options: 'i' },
+        [field]: { $regex: safe, $options: 'i' },
       })),
     };
   }
@@ -56,12 +72,62 @@ export class QueryToolkit<T extends Document> {
     const filterQuery: any = {};
 
     for (const key of this.filterableFields) {
-      if (options[key] !== undefined) {
-        filterQuery[key] = options[key];
-      }
+      const value = options[key];
+      if (value === undefined) continue;
+
+      // Prevent NoSQL operator injection (e.g. ?status[$ne]=active parsed
+      // into an object). Only allow primitive values and arrays of primitives.
+      if (!this.isSafeFilterValue(value)) continue;
+
+      filterQuery[key] = value;
     }
 
     return filterQuery;
+  }
+
+  /**
+   * A filter value is safe when it is a primitive (string/number/boolean)
+   * or an array of primitives. Plain objects are rejected because they can
+   * carry MongoDB query operators ($ne, $gt, $where, ...).
+   */
+  private isSafeFilterValue(value: any): boolean {
+    if (value === null) return true;
+
+    if (Array.isArray(value)) {
+      return value.every((item) => this.isPrimitive(item));
+    }
+
+    return this.isPrimitive(value);
+  }
+
+  private isPrimitive(value: any): boolean {
+    const type = typeof value;
+    return type === 'string' || type === 'number' || type === 'boolean';
+  }
+
+  /**
+   * Coerces and clamps pagination input. Query-string params arrive as
+   * strings, so values are normalized to integers, page is forced to >= 1,
+   * and limit is bounded to [1, maxLimit] to prevent unbounded scans.
+   */
+  private normalizePagination(
+    page?: number | string,
+    limit?: number | string
+  ): { page: number; limit: number } {
+    const parsedPage = Math.floor(Number(page));
+    const parsedLimit = Math.floor(Number(limit));
+
+    const safePage =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+
+    let safeLimit =
+      Number.isFinite(parsedLimit) && parsedLimit >= 1
+        ? parsedLimit
+        : this.defaultLimit;
+
+    if (safeLimit > this.maxLimit) safeLimit = this.maxLimit;
+
+    return { page: safePage, limit: safeLimit };
   }
 
   private parseSortString(sort?: string): Record<string, 1 | -1> {
@@ -80,21 +146,36 @@ export class QueryToolkit<T extends Document> {
 
   private buildSelectQuery(select?: string): string | null {
     if (!select) return null;
-    
-    // If selectableFields is empty, allow all fields
-    if (this.selectableFields.length === 0) {
-      return select.replace(/,/g, ' ');
+
+    let fields = select
+      .split(',')
+      .map((field) => field.trim())
+      .filter((field) => field.length > 0);
+
+    // Filter fields based on selectableFields (if a whitelist is configured)
+    if (this.selectableFields.length > 0) {
+      fields = fields.filter((field) => {
+        const fieldName = field.startsWith('-') ? field.substring(1) : field;
+        return this.selectableFields.includes(fieldName);
+      });
     }
-    
-    // Filter fields based on selectableFields
-    const fields = select.split(',');
-    const validFields = fields.filter(field => {
-      // Handle exclusion fields (fields with minus prefix)
-      const fieldName = field.startsWith('-') ? field.substring(1) : field;
-      return this.selectableFields.includes(fieldName);
-    });
-    
-    return validFields.join(' ');
+
+    if (fields.length === 0) return null;
+
+    // MongoDB does not allow mixing inclusion and exclusion (except for _id).
+    // If both are present, prefer inclusion fields and drop exclusions.
+    const hasInclusion = fields.some(
+      (field) => !field.startsWith('-')
+    );
+    const hasExclusion = fields.some((field) => field.startsWith('-'));
+
+    if (hasInclusion && hasExclusion) {
+      fields = fields.filter(
+        (field) => !field.startsWith('-') || field === '-_id'
+      );
+    }
+
+    return fields.length > 0 ? fields.join(' ') : null;
   }
 
   private buildPopulateFields(populate?: string): string[] {
@@ -113,7 +194,8 @@ export class QueryToolkit<T extends Document> {
   }
 
   async findWithOptions(options: QueryOptions = {}): Promise<PaginationResult<T>> {
-    const { q, page = 1, limit = 10, sort, select, populate, ...filterOptions } = options;
+    const { q, page: rawPage, limit: rawLimit, sort, select, populate, ...filterOptions } = options;
+    const { page, limit } = this.normalizePagination(rawPage, rawLimit);
     const skip = (page - 1) * limit;
 
     const query = {
